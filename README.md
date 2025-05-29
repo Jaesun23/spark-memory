@@ -1,5 +1,11 @@
 # Spark Memory ✨
 
+[![PyPI version](https://badge.fury.io/py/spark-memory.svg)](https://badge.fury.io/py/spark-memory)
+[![Python Version](https://img.shields.io/pypi/pyversions/spark-memory.svg)](https://pypi.org/project/spark-memory/)
+[![Tests](https://github.com/Jaesun23/spark-memory/actions/workflows/test.yml/badge.svg)](https://github.com/Jaesun23/spark-memory/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 High-performance MCP (Model Context Protocol) memory server powered by Redis Stack and LangGraph.
 
 ## Features
