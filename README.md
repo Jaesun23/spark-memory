@@ -31,6 +31,27 @@ pip install spark-memory
 
 ### Install Redis Stack
 
+**Automatic Setup (Recommended):**
+```bash
+# Download and run the setup script
+curl -sSL https://raw.githubusercontent.com/Jaesun23/spark-memory/main/setup/redis-setup.sh | bash
+```
+
+Or if you've already cloned the repository:
+```bash
+./setup/redis-setup.sh
+```
+
+The setup script will:
+- ✅ Check if Redis Stack is installed
+- 📥 Offer to install Redis Stack if missing (macOS/Linux)
+- 🔍 Verify all required modules (JSON, Search, TimeSeries)
+- 📁 Create data directories and configuration
+- 🚀 Set up auto-start on system boot
+- ✨ Start Redis Stack automatically
+
+**Manual Installation:**
+
 **macOS:**
 ```bash
 brew tap redis-stack/redis-stack
@@ -49,6 +70,15 @@ sudo apt-get install redis-stack
 **Docker:**
 ```bash
 docker run -d --name redis-stack -p 6379:6379 -p 8001:8001 redis/redis-stack:latest
+```
+
+**Verify Installation:**
+```bash
+# Check if Redis Stack is running
+redis-cli ping
+
+# Verify required modules
+redis-cli MODULE LIST
 ```
 
 ## Quick Start
