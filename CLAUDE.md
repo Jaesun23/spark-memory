@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Running the Project
 ```bash
+# Install and start Redis Stack (required)
+brew tap redis-stack/redis-stack
+brew install redis-stack
+
+# Option 1: Use the setup script (recommended)
+./setup/redis-setup.sh
+
+# Option 2: Manual start with default settings
+redis-stack-server
+
+# Note: redis-stack-server ignores 'dir' in config files
+# Use setup script for custom data directories
+
 # Run as MCP server (recommended)
 uvx spark-memory
 

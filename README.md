@@ -50,6 +50,10 @@ The setup script will:
 - 🚀 Set up auto-start on system boot
 - ✨ Start Redis Stack automatically
 
+> ⚠️ **Important**: `redis-stack-server` has a known issue where it ignores the `dir` directive in config files.
+> The setup script works around this by using `redis-server` with manual module loading.
+> For more details, see [Redis Stack Configuration Guide](docs/REDIS_STACK_CONFIGURATION.md).
+
 **Manual Installation:**
 
 **macOS:**
