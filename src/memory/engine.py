@@ -12,52 +12,82 @@ from src.memory.actions import (
     LifecycleActions,
     HelpActions,
 )
+from src.rag.relationships import ChunkRelationshipManager
+from src.memory.cross_memory_bridge import CrossMemoryBridge
+from src.memory.memory_analytics import MemoryAnalytics
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryEngine:
-    """메모리 엔진 - 모든 메모리 작업의 진입점.
+    """Memory Engine - Entry point for all memory operations.
     
-    액션 기반 모듈화 아키텍처로 각 기능이 독립적으로 구현됨.
+    Action-based modular architecture where each feature is implemented independently.
     """
     
     def __init__(
         self,
         redis_client: RedisClient,
-        enable_security: bool = False,
+        enable_security: bool = True,
         enable_events: bool = True,
         default_timezone: str = "UTC",
+        enable_relationships: bool = True,
     ):
-        """메모리 엔진 초기화.
+        """Initialize memory engine.
 
         Args:
-            redis_client: Redis 클라이언트
-            enable_security: 보안 기능 활성화 여부
-            enable_events: 이벤트 기능 활성화 여부
-            default_timezone: 기본 타임존
+            redis_client: Redis client instance
+            enable_security: Whether to enable security features
+            enable_events: Whether to enable event features
+            default_timezone: Default timezone
+            enable_relationships: Whether to enable chunk relationship features
         """
         self.redis = redis_client
         self.enable_security = enable_security
         self.enable_events = enable_events
+        self.enable_relationships = enable_relationships
         
-        # 액션 핸들러 초기화
+        # Initialize relationship managers (optional)
+        self.relationship_manager = None
+        self.cross_memory_bridge = None
+        self.memory_analytics = None
+        if enable_relationships:
+            self.relationship_manager = ChunkRelationshipManager(
+                redis_client=redis_client,
+                similarity_threshold=0.7,
+                max_relations_per_chunk=50
+            )
+            # Initialize CrossMemoryBridge
+            self.cross_memory_bridge = CrossMemoryBridge(
+                redis_client=redis_client,
+                relationship_manager=self.relationship_manager
+            )
+            # Initialize MemoryAnalytics
+            self.memory_analytics = MemoryAnalytics(
+                redis_client=redis_client,
+                cross_memory_bridge=self.cross_memory_bridge
+            )
+        
+        # Initialize action handlers
         self.basic_actions = BasicActions(redis_client, default_timezone)
-        self.search_actions = SearchActions(redis_client)
+        self.search_actions = SearchActions(
+            redis_client, 
+            relationship_manager=self.relationship_manager
+        )
         self.consolidate_actions = ConsolidateActions(redis_client)
         self.lifecycle_actions = LifecycleActions(redis_client)
         self.help_actions = HelpActions()
         
-        # 보안 관련 (기존 호환성 유지)
+        # Security related (maintain existing compatibility)
         self.access_control = None
         self.audit_logger = None
         self.field_encryption = None
         self.key_manager = None
         
-        # 벡터 스토어 (선택적)
+        # Vector store (optional)
         self.vector_store = None
         
-        # 추가 매니저들 (기존 호환성)
+        # Additional managers (existing compatibility)
         self.consolidator = None
         self.lifecycle_manager = None
         
@@ -71,31 +101,31 @@ class MemoryEngine:
         options: Optional[Dict[str, Any]] = None,
         principal: Optional[Any] = None,  # Principal type from security module
     ) -> Union[str, Dict[str, Any], List[Dict[str, Any]], List[SearchResult]]:
-        """메모리 명령어 실행 - 라우팅만 담당.
+        """Execute memory command - handles routing only.
 
         Args:
-            action: 실행할 액션
-            paths: 메모리 경로
-            content: 저장/수정할 내용
-            options: 추가 옵션
-            principal: 실행 주체 (보안용)
+            action: Action to execute
+            paths: Memory paths
+            content: Content to save/modify
+            options: Additional options
+            principal: Execution principal (for security)
 
         Returns:
-            액션 실행 결과
+            Action execution result
 
         Raises:
-            ValueError: 잘못된 액션이나 파라미터
-            RuntimeError: 실행 중 오류
+            ValueError: Invalid action or parameters
+            RuntimeError: Execution error
         """
         options = options or {}
 
-        # 보안 체크 (기존 로직 유지 - 보안 모듈 활성화 시)
+        # Security check (maintain existing logic - when security module is enabled)
         if self.enable_security and self.access_control and principal:
-            # 보안 검사는 access_control이 설정된 경우에만 수행
-            # TODO: security 모듈 임포트 후 활성화
+            # Security checks are performed only when access_control is configured
+            # TODO: Activate after importing security module
             pass
 
-        # 액션 라우팅
+        # Action routing
         try:
             logger.info(f"Executing memory action: {action} with paths: {paths}")
             
@@ -119,28 +149,116 @@ class MemoryEngine:
             elif action == "help":
                 result = await self.help_actions.execute(paths, content, options)
             
+            # Cross-memory actions (LRMM advanced features)
+            elif action == "link_conversation":
+                if not self.cross_memory_bridge:
+                    raise RuntimeError("CrossMemoryBridge not initialized. Enable relationships to use this feature.")
+                conv_id = paths[0] if paths else None
+                if not conv_id:
+                    raise ValueError("Conversation ID required for link_conversation action")
+                result = await self.cross_memory_bridge.link_conversation_to_documents(conv_id)
+            
+            elif action == "find_cross_memory":
+                if not self.cross_memory_bridge:
+                    raise RuntimeError("CrossMemoryBridge not initialized. Enable relationships to use this feature.")
+                memory_key = paths[0] if paths else None
+                if not memory_key:
+                    raise ValueError("Memory key required for find_cross_memory action")
+                
+                # Check advanced search options
+                if options.get("advanced", False):
+                    cross_relations = await self.cross_memory_bridge.find_related_memories_advanced(
+                        memory_key, options.get("search_options", {})
+                    )
+                else:
+                    cross_relations = await self.cross_memory_bridge.find_related_memories(memory_key)
+                
+                # Convert to serializable format
+                result = {
+                    "source_id": cross_relations.source_id,
+                    "source_type": cross_relations.source_type,
+                    "related_conversations": cross_relations.related_conversations,
+                    "related_documents": cross_relations.related_documents,
+                    "temporal_neighbors": cross_relations.temporal_neighbors,
+                    "shared_entities": cross_relations.shared_entities,
+                    "metadata": cross_relations.metadata
+                }
+            
+            elif action == "analyze_memory_graph":
+                if not self.memory_analytics:
+                    raise RuntimeError("MemoryAnalytics not initialized. Enable relationships to use this feature.")
+                analysis = await self.memory_analytics.analyze_memory_graph()
+                # Convert to serializable format
+                result = {
+                    "total_nodes": analysis.total_nodes,
+                    "total_edges": analysis.total_edges,
+                    "connected_components": analysis.connected_components,
+                    "avg_clustering_coefficient": analysis.avg_clustering_coefficient,
+                    "hub_nodes": analysis.hub_nodes,
+                    "isolated_nodes": analysis.isolated_nodes,
+                    "dense_clusters": [
+                        {
+                            "id": cluster.id,
+                            "topic": cluster.topic,
+                            "size": cluster.size,
+                            "cohesion_score": cluster.cohesion_score,
+                            "nodes": cluster.nodes[:5]  # First 5 only
+                        }
+                        for cluster in analysis.dense_clusters
+                    ],
+                    "temporal_patterns": analysis.temporal_patterns,
+                    "recommendations": analysis.recommendations,
+                    "analysis_timestamp": analysis.analysis_timestamp.isoformat()
+                }
+            
+            elif action == "suggest_connections":
+                if not self.memory_analytics:
+                    raise RuntimeError("MemoryAnalytics not initialized. Enable relationships to use this feature.")
+                suggestions = await self.memory_analytics.suggest_connections()
+                # Convert to serializable format
+                result = [
+                    {
+                        "source_id": s.source_id,
+                        "target_id": s.target_id,
+                        "suggested_type": s.suggested_type.value,
+                        "confidence": s.confidence,
+                        "reasoning": s.reasoning,
+                        "potential_benefit": s.potential_benefit,
+                        "metadata": s.metadata
+                    }
+                    for s in suggestions
+                ]
+            
+            elif action == "get_memory_insights":
+                if not self.memory_analytics:
+                    raise RuntimeError("MemoryAnalytics not initialized. Enable relationships to use this feature.")
+                memory_key = paths[0] if paths else None
+                if not memory_key:
+                    raise ValueError("Memory key required for get_memory_insights action")
+                result = await self.memory_analytics.get_memory_insights(memory_key)
+            
             else:
                 raise ValueError(
-                    f"Unknown action: {action}. Valid actions: save, get, search, update, delete, consolidate, lifecycle, help"
+                    f"Unknown action: {action}. Valid actions: save, get, search, update, delete, consolidate, lifecycle, help, link_conversation, find_cross_memory, analyze_memory_graph, suggest_connections, get_memory_insights"
                 )
 
-            # 성공 감사 로그 (보안 모듈 활성화 시)
+            # Success audit log (when security module is enabled)
             if self.enable_security and self.audit_logger and principal:
-                # TODO: security 모듈 활성화 후 감사 로그 기록
+                # TODO: Record audit log after activating security module
                 pass
 
             return result
 
         except ValueError as e:
-            # 파라미터 검증 오류
+            # Parameter validation error
             logger.error(f"Invalid parameters for {action}: {e}")
             
-            # 오류에 대한 도움말 제안
+            # Suggest help for the error
             error_msg = str(e)
             suggestion = self._suggest_fix(error_msg, action)
             
             if self.enable_security and self.audit_logger and principal:
-                # TODO: security 모듈 활성화 후 감사 로그 기록
+                # TODO: Record audit log after activating security module
                 pass
             
             raise RuntimeError(f"Memory operation failed: {error_msg}\n\n{suggestion}") from e
@@ -149,47 +267,79 @@ class MemoryEngine:
             logger.error(f"Error executing memory action {action}: {e}")
             
             if self.enable_security and self.audit_logger and principal:
-                # TODO: security 모듈 활성화 후 감사 로그 기록
+                # TODO: Record audit log after activating security module
                 pass
             
             raise
 
-    # 보안 관련 메서드들 - security 모듈 통합 시 활성화
+    # Security related methods - activate when integrating security module
     # async def _log_audit(...) -> None:
-    #     """감사 로그 기록."""
+    #     """Record audit log."""
     #     pass
     #
     # def _get_audit_event_type(self, action: str):
-    #     """액션에 대응하는 감사 이벤트 타입 반환."""
+    #     """Return audit event type corresponding to action."""
     #     pass
 
     def _suggest_fix(self, error_msg: str, action: str) -> str:
-        """오류 메시지를 분석하여 수정 방법 제안."""
+        """Analyze error message and suggest fix."""
         suggestions = {
             "Content is required": """
-content 파라미터가 필요합니다.
+Content parameter is required.
 
-m_memory("save", ["category"], "저장할 내용")
+m_memory("save", ["category"], "content to save")
 """,
             "Paths are required": """
-paths 파라미터가 필요합니다.
+Paths parameter is required.
 
 m_memory("get", ["path", "to", "memory"])
 """,
             "Query string is required": """
-키워드 검색에는 검색어가 필요합니다.
+Keyword search requires a search term.
 
-content 파라미터에 검색어를 입력하세요:
-m_memory("search", [], "검색어")
+Enter search term in content parameter:
+m_memory("search", [], "search term")
 """,
             "Time range search requires filters": """
-시간 범위 검색에는 필터가 필요합니다.
+Time range search requires time filters.
 
-options에 시간 필터를 추가하세요:
+Add time filter to options:
 m_memory("search", [], None, {
     "type": "time_range",
     "filters": {"date": "2025-05-28"}
 })
+""",
+            "CrossMemoryBridge not initialized": """
+CrossMemoryBridge is not initialized.
+
+Enable relationships when initializing memory engine to use LRMM advanced features:
+- link_conversation (automatic conversation-document linking)
+- find_cross_memory (cross-memory search)
+""",
+            "MemoryAnalytics not initialized": """
+MemoryAnalytics is not initialized.
+
+Enable relationships when initializing memory engine to use LRMM advanced features:
+- analyze_memory_graph (memory graph analysis)
+- suggest_connections (AI connection suggestions)
+- get_memory_insights (individual memory insights)
+""",
+            "Conversation ID required": """
+Conversation ID is required.
+
+link_conversation action requires a conversation key:
+m_memory("link_conversation", ["stream:memory:conversation:2024/01/15/10/30/00"])
+""",
+            "Memory key required": """
+Memory key is required.
+
+Provide memory key in one of these formats:
+- Conversation: "stream:memory:conversation:2024/01/15/10/30/00"
+- Document: "json:memory:document:2024/01/15/report.pdf"
+
+Example:
+m_memory("find_cross_memory", ["json:memory:document:2024/01/15/report.pdf"])
+m_memory("get_memory_insights", ["stream:memory:conversation:2024/01/15/10/30/00"])
 """,
         }
 
@@ -197,4 +347,37 @@ m_memory("search", [], None, {
             if key in error_msg:
                 return suggestion
 
-        return f"'{action}' 액션 사용법은 help를 참조하세요:\nm_memory('help', ['{action}'])"
+        # LRMM feature related general help
+        if any(action in error_msg for action in ["link_conversation", "find_cross_memory", "analyze_memory_graph", "suggest_connections", "get_memory_insights"]):
+            return """
+LRMM Advanced Features Usage:
+
+🔗 Conversation-Document Linking: m_memory("link_conversation", [conversation_ID])
+🔍 Cross-Memory Search: m_memory("find_cross_memory", [memory_key])
+📊 Graph Analysis: m_memory("analyze_memory_graph", [])
+🤖 Connection Suggestions: m_memory("suggest_connections", [])
+🔍 Memory Insights: m_memory("get_memory_insights", [memory_key])
+
+Detailed help: m_memory("help", ["feature_name"])
+"""
+
+        return f"For '{action}' action usage, refer to help:\nm_memory('help', ['{action}'])"
+    
+    def set_vector_store(self, vector_store: Any) -> None:
+        """Set vector store.
+        
+        Args:
+            vector_store: Vector store instance
+        """
+        self.vector_store = vector_store
+        # Also set to SearchActions
+        self.search_actions.vector_store = vector_store
+        
+    def set_embedding_service(self, embedding_service: Any) -> None:
+        """Set embedding service.
+        
+        Args:
+            embedding_service: Embedding service instance
+        """
+        if self.relationship_manager:
+            self.relationship_manager.embedding_generator = embedding_service
